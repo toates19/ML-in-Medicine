@@ -1,0 +1,188 @@
+---
+title: 'Primer on ML: Figures'
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Attempt to reproduce some of the figures in this paper
+Figure 1A
+```{r}
+library(tidyverse)
+# The ground truth data relationship is modelled by:
+eq <- function(x){x*(x-0.4)*(x-0.5)*(x-0.7)*(x-1)}
+
+# this looks like
+# curve(eq)
+
+# To produce Fig 1a need to simulate some data
+x_1a <- runif(1000, min = 0, max = 1)
+# Scale y to [0,1]
+library(scales)
+y_1a <- rescale((x_1a*(x_1a-0.4)*(x_1a-0.5)*(x_1a-0.7)*(x_1a-1)), to = c(0,1))
+
+# make a tibble & then plot the various 
+ground_truth <- tibble(y_1a,x_1a)
+
+fig1a_5curve <-
+  ggplot(ground_truth, aes(x_1a, y_1a)) + stat_smooth(method = lm, formula = y ~ poly(x,5), se = F, colour = "black" ) + theme_light() + labs(x="Data", y="Outcome")
+
+fig1a_minuslinear <-
+  fig1a_5curve + 
+  stat_smooth(method = lm, formula = y ~ poly(x,2), se = F, colour = "goldenrod2" ) +
+  stat_smooth(method = lm, formula = y ~ poly(x,3), se = F, colour = "chartreuse3" ) +
+  stat_smooth(method = lm, formula = y ~ poly(x,4), se = F, colour = "deepskyblue" )
+
+fig1a_all <-
+  fig1a_minuslinear +
+  stat_smooth(method = lm, formula = y ~ x, se = F, colour = "magenta3")
+```
+
+Figure 2
+```{r}
+# Stimulate the data as set out in the paper
+set.seed(19)
+
+# Need a noise term to add to simulated data 
+noise <- rnorm(1000, mean = 0, sd = 0.01)
+
+# Simulate data
+a <- (runif(1000, min = 0, max = 0.2)) + noise
+b <- (runif(1000, min = 0, max = 0.2)) + noise
+c <- (runif(1000, min = 0, max = 0.2)) + noise
+d <- (runif(1000, min = 0, max = 0.2)) + noise
+e <- (runif(1000, min = 0, max = 0.2)) + noise
+
+train <- tibble(a,b,c,d,e)%>%
+          mutate(x_2a = rescale((a+b+c+d+e), to = c(0,1)))%>%
+          mutate(y_2a = rescale((x_2a*(x_2a-0.4)*(x_2a-0.5)*(x_2a-0.7)*(x_2a-1)), to = c(0,1))+noise)
+
+# fit the models and generate predicted values
+library(broom)
+fit1 <- lm(y_2a ~ x_2a, train)
+datfit1 <- augment(fit1, data = train)
+fit2 <- lm(y_2a ~ poly(x_2a,2), train)
+datfit2 <- augment(fit2, data = train)
+fit3 <- lm(y_2a ~ poly(x_2a,3), train)
+datfit3 <- augment(fit3, data = train)
+fit4 <- lm(y_2a ~ poly(x_2a,4), train)
+datfit4 <- augment(fit4, data = train)
+fit5 <- lm(y_2a ~ poly(x_2a,5), train)
+datfit5 <- augment(fit5, data = train)
+
+# plot as per Fig 2a
+# make relevant df
+p2a <- tibble(
+  y = datfit1$y_2a, 
+  p1 = datfit1$.fitted, 
+  p2 = datfit2$.fitted,
+  p3 = datfit3$.fitted,
+  p4 = datfit4$.fitted,
+  p5 = datfit5$.fitted
+) 
+# wide to long
+  p2a <- gather(p2a,predictors,yhat,p1:p5)
+
+# Plot
+# Want to build yhat ~ y plots with same colours as models only plots 
+# Start with linear model
+only_lm <-
+  filter(p2a, predictors == "p1") %>%
+  ggplot(aes(y, yhat))+geom_point(shape = 1, colour = "magenta3") +
+  theme_light() + ylim(c(0,1)) + xlim(c(0,1)) +
+  labs(y = "Outcome Predicted by Model", x = "Actual Outcome")
+
+# Add polynomials 2-4
+without_5 <-
+  filter(p2a, predictors == c("p1","p2","p3","p4")) %>% 
+  ggplot(aes(y, yhat, colour = predictors))+geom_point(shape = 1) +
+  scale_color_manual(values = c("magenta3", "goldenrod2", "chartreuse3", "deepskyblue")) +
+  theme_light() + ylim(c(0,1)) + xlim(c(0,1)) +
+  labs(y = "Outcome Predicted by Model", x = "Actual Outcome") + 
+  guides(colour = "none")
+
+# Add polynomial 5
+all_yhats <-
+  ggplot(p2a, aes(y, yhat, colour = predictors))+geom_point(shape = 1) +
+    scale_color_manual(values = c("magenta3", "goldenrod2", "chartreuse3", "deepskyblue", "black")) +
+  theme_light() + ylim(c(0,1)) + xlim(c(0,1)) +
+  labs(y = "Outcome Predicted by Model", x = "Actual Outcome") + 
+  guides(colour = "none")
+```
+And now the RMSE plots
+```{r}
+# This is taken from this url:
+# https://blog.revolutionanalytics.com/2015/09/why-big-data-learning-curves.html
+
+# Need to make a function for the RMSE
+rmse <- function(actual, predicted) sqrt( mean( (actual - predicted)^2 ))
+
+# Main function 
+# This generates the Learning Curve
+library(data.table)
+
+# Differs from website thus:
+# vss - validation set size - 200 ie a fifth ot total
+# min_tss - move along in windows of 10
+run_learning_curve <- function(model_formula, data, vss=200, num_tss=30, min_tss=10){
+  library(data.table)
+  max_tss <- nrow(data) - vss
+  tss_vector <- seq(min_tss, max_tss, length=num_tss)
+  data.table::rbindlist( lapply (tss_vector, function(tss){
+    vs_idx <- sample(1:nrow(data), vss)
+    vs <- data[vs_idx,]
+    
+    ts_eligible <- setdiff(1:nrow(data), vs_idx)
+    ts <- data[sample(ts_eligible, tss),]
+      
+    fit <- lm( model_formula, ts)
+    training_error <- rmse(ts$y, predict(fit, ts))
+    validation_error <- rmse(vs$y, predict(fit, vs))
+    
+    data.frame(tss=tss, 
+                error_type = factor(c("training", "validation"), 
+                                    levels=c("validation", "training")),
+                error=c(training_error, validation_error))
+  }) )
+}
+
+# Run on increasing complexity
+data <- as.data.frame(train)
+learning_curve_1 <- run_learning_curve(y_2a ~ a, data)
+learning_curve_2 <- run_learning_curve(y_2a ~ a*b, data)
+learning_curve_3 <- run_learning_curve(y_2a ~ a*b*c, data)
+learning_curve_4 <- run_learning_curve(y_2a ~ a*b*c*d, data)
+learning_curve_5 <- run_learning_curve(y_2a ~ a*b*c*d*e, data)
+
+# Extract from each to allow plotting on one plot
+lc1<-filter(learning_curve_1, error_type == "validation")
+lc2<-filter(learning_curve_2, error_type == "validation")
+lc3<-filter(learning_curve_3, error_type == "validation")
+lc4<-filter(learning_curve_4, error_type == "validation")
+lc5<-filter(learning_curve_5, error_type == "validation")
+
+lc <-
+  list(lc1, lc2, lc3, lc4, lc5) %>% reduce(left_join, by = c("tss", "error_type")) %>%
+  rename(p1 = error.x,
+         p2 = error.y,
+         p3 = error.x.x,
+         p4 = error.y.y,
+         p5 = error
+         ) %>%
+  gather(key = "predictors", value = "error", p1:p5) %>%
+  mutate(predictors = factor(predictors))
+
+# plot
+errorplot <- 
+  ggplot(lc, aes(tss, error, colour = predictors))+geom_line() +
+    scale_color_manual(values = c("magenta3", "goldenrod2", "chartreuse3", "deepskyblue", "black")) +
+  theme_light() +
+  labs(y = "Error in Prediction", x = "Sample Size") +
+  guides(colour = "none")
+```
+
